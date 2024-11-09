@@ -1,5 +1,17 @@
-
 \documentclass[sigconf]{acmart}
+
+\usepackage{enumitem}
+\usepackage{balance}
+
+\setcopyright{none}
+\acmConference{}  % Remove conference info
+\acmYear{}        % Remove year info
+\acmISBN{}        % Remove ISBN
+\acmDOI{}         % Optionally remove the DOI too
+
+\settopmatter{printacmref=false}
+\pagestyle{empty}
+\renewcommand\footnotetextcopyrightpermission[1]{}
 
 \begin{document}
 
@@ -35,21 +47,134 @@
 \maketitle
 
 \section{Problem Statement}
-  Two-stage IR systems that utilize both sparse and dense models for document retrieval have gained immense popularity over recent years for their capabilities to retrieve relevant documents with high confidence and lower computational costs. These systems test their abilities by checking the relevance of the top retrieved documents against the given query, utilizing query-document relevance measures such as MAP, nDCG, F1, and more. While traditional two-stage IR systems perform well for general retrieval tasks, specific query tasks require more data analysis to procure a relevant list of documents that answer the task in context. Traditional models that rely purely on relevance metrics would not answer the task at hand that requires further context evaluation.
+  Two-stage IR systems that utilize both sparse and dense models for document retrieval have gained immense popularity over recent years for their capabilities to retrieve relevant documents with high confidence and lower computational costs.[7,8] These systems test their abilities by checking the relevance of the top retrieved documents against the given query, utilizing query-document relevance measures such as MAP, nDCG, F1, and more. While traditional two-stage IR systems perform well for general retrieval tasks, specific query tasks require more data analysis to procure a relevant list of documents that answer the task in context.[4,5] Traditional models that rely purely on relevance metrics would not answer the task at hand that requires further context evaluation.
   
   In this paper, we consider the case of hypothesis testing and research, where a given query requires a more diverse set of retrieved documents than traditional two-stage IR systems produce. Specifically, a hypothesis research task requires the results to contain both supporting and contradicting relevant documents that are diverse in opinions and perspectives to construct a well-rounded research paper for the hypothesis. We define the task as follows: let $q$ represent a given query related to hypothesis testing, and let $D$ denote the large corpus of documents. Our goal is to retrieve two sets of documents, $D_{support}$ and $D_{contradict}$ such that $D_{support}\in D$ contains the document that supports hypothesis $q$ and $D_{contradict}\in D$ contains documents that contradict hypothesis $q$. The output of our system would be $D_{support}^*\cup D_{contradict}^*$, where the astrict of each dataset represents the top-k relevant documents from the set. we also note that $|D_{support}^*|\geq m$ and $|D_{contradict}^*|\geq m$ for some defined number $m$ to ensure a balance of opinions in the final list of documents. The key research question we introduce is: How can a retrieval system be designed to guarantee a balanced retrieval of supporting and contradictory evidence to assist in comprehensive hypothesis validation?
 
 \section{Motivation}
-In scientific fields like biomedicine, social sciences, and public policy, research rigor often depends on analyzing both supporting and opposing studies. For example, a researcher exploring the effects of a new drug might need to review studies that report both positive and negative outcomes to reach a well-rounded conclusion. However, locating both types of documents can be challenging and time-intensive when using traditional IR systems, which may lack the nuance to distinguish supportive versus opposing stances. In the context of traditional IR systems, the user is forced to develop multiple queries that would each procure a list of documents that support the given stance and perspective of the query to retrieve a balanced list of documents. Developing an IR system with built-in stance balancing would significantly enhance research efficiency and rigor, providing a valuable tool for hypothesis testing in fields that demand balanced viewpoints for critical decision-making. It is also important to note that all three writers of this paper have a personal interest in research in the biomedical field, and have in the past encountered the issue of balanced perspectives in the biomedical IR systems.
+In scientific fields like biomedicine, social sciences, and public policy, research rigor often depends on analyzing both supporting and opposing studies. For example, a researcher exploring the effects of a new drug might need to review studies that report both positive and negative outcomes to reach a well-rounded conclusion. However, locating both types of documents can be challenging and time-intensive when using traditional IR systems, which may lack the nuance to distinguish supportive versus opposing stances.[4,5] In the context of traditional IR systems, the user is forced to develop multiple queries that would each procure a list of documents that support the given stance and perspective of the query to retrieve a balanced list of documents. Developing an IR system with built-in stance balancing would significantly enhance research efficiency and rigor, providing a valuable tool for hypothesis testing in fields that demand balanced viewpoints for critical decision-making.
 
 \section{Related work}
+\begin{enumerate}[left=0em] 
+    \item \textbf{T5 for Stance Classification:} Raffel et al. (2020) demonstrated T5's capabilities for various NLP tasks by framing problems as "text-to-text." This model has shown promise in stance-related tasks, where input queries are classified as supportive or contradictory to hypotheses. We aim to utilize T5 for stance detection on retrieved documents, filtering results into supporting and contradicting categories.
+    \item \textbf{Balanced Retrieval Systems:} Recent work on balanced information retrieval, such as that by Krishna et al. (2022), emphasizes diverse and multi-perspective retrieval to avoid bias in the returned results. Our approach takes this further by ensuring a mandatory number of documents supporting and contradicting a hypothesis, creating an explicit balance in perspective.
+    \item \textbf{Multi Perspective Generation:} Chen and Choi et al. (2022) further discuss a search engine system that prioritizes the retrieval of a ranked list containing diverse perspectives over accuracy-maximizing systems that do not consider diversity. The system proposed assumes that diverse perspectives would correspond to both supporting and contradicting documents, however, scientific documents could support the same perspective while being diverse, such as bringing evidence from different fields. As with the previous paper mentioned, our approach ensures a mandatory number of documents supporting and contradicting a hypothesis and thus creates an explicit balance in perspective. Furthermore, this paper suggests a method of generating additional queries with diverse perspectives from the original query, which could be utilized in our approach to enhance the diversity of documents that initial Sparse Retrieval Model would retrieve.
+    \item \textbf{Diverse Search Mechanisms:} Clarke et al. (2021) explored Maximal Marginal Relevance (MMR) for re-ranking search results to improve diversity. This technique could be instrumental in re-ranking our final retrieval set, ensuring the system avoids redundancy and captures nuanced supporting and opposing views.
+    \item \textbf{Biomedical NLP for Hypothesis Testing:} HealthVer Juraj et al. (2024) is a biomedical question-answering dataset and framework that encourages the retrieval of comprehensive information to support hypothesis testing in the biomedical domain. Our system builds upon this by implementing both support and contradiction retrieval functions, enhancing its utility for scientific hypothesis validation.
+
+\end{enumerate}
 
 \section{Baselines}
+We will use a traditional two-stage retrieval IR system using BM25 for the initial sparse retrieval model and a BERT-based model for the dense retrieval model. Which BERT model used will be tailored for the specific dataset in question, such as BioBERT for biomedical hypotheses datasets and general model such as Google’s BERT or sBERT for general information hypotheses. These open-source domain-specific BERT models have shown to have very high accuracy with traditional metrics (MAP, nDCG, F1) [7,8], however, they have not been optimized to return a diverse set of documents, making them greatly applicable as a baseline model for enhancement for tasks that require diverse results. [4,5] Our project will enhance these baseline models for hypothesis research applications. 
 
-\section{Datasets}
+\section{Dataset(s)}
+We will use HealthVer, a manually annotated dataset consisting of 14,330 evidence-claim pairs with their veracity label (i.e. SUPPORTS, REFUTES, and NEUTRAL). [2] The HealthVer dataset is a comprehensive resource developed for evidence-based fact-checking of health-related claims, focusing on assessing the truthfulness of real-world claims through comparison with scientific articles. The dataset begins with claim retrieval, focusing on COVID-19 topics prone to misinformation, using real-world search engine snippets to collect natural claims from various sources like news articles, blogs, and social media. The diversity of sources ensures that HealthVer reflects the range of public perspectives researchers encounter, especially on contentious topics. The dataset contains both trivial and nontrivial claims, providing grounds for a hypothesis-testing system that maintains high performances with varying data. [2]
 
 \section{Evaluation}
 
-\section{References}
+We will evaluate our system based on the following metrics:
+
+\begin{enumerate}[left=0em] 
+    \item \textbf{Precision@k and MRecall@k:} We use $ \text{MRecall@k} $ to evaluate whether a document set sufficiently covers various perspectives. $ \text{MRecall@k} $ considers retrieval successful if all or at least $ k $ answers from the answer set $ {a_1, a_2, \dots, a_m} $ are recovered among the $ k $ passages $ {p_1, \dots, p_k} $ from $ C $ that contain distinct answers relevant to the question $ q $. Intuitively, $ \text{MRecall@k} $ extends Recall by assessing the completeness of retrieval, requiring the model to retrieve all $ n $ answers in the set. 
+    Additionally, we report $ \text{Precision@k} $, which indicates the percentage of documents in the retrieved set that contain any relevant perspectives. This metric measures the relevance of the retrieved documents to the question.
+    \item \textbf{Inverse Simpson Index:} The Simpson Index is a measure of diversity that accounts for the number of categories and the distribution of items across those categories. The formula for the Simpson Index \( D \) is:
+
+\[
+D = 1 - \sum_{i=1}^{N} p_i^2
+\]
+
+Where:
+\begin{itemize}[left=0em]
+    \item \( p_i \) is the proportion of documents belonging to category \( i \),
+    \item \( N \) is the number of categories (e.g., different perspectives or stance labels).
+\end{itemize}
+
+To understand diversity, the Inverse Simpson Index (which is a variation) is often used. The Inverse Simpson Index is calculated as:
+
+$$
+\text{Inverse Simpson Index} = \frac{1}{\sum\limits_{i=1}^{N} p_i^2}
+$$
+
+Where:
+\begin{itemize}[left=0em]
+    \item \( p_i \) represents the proportion of documents assigned to category \( i \).
+\end{itemize}
+
+The Inverse Simpson Index gives a higher score when the distribution is more even across categories (higher diversity), and a lower score when most of the documents belong to a few categories (lower diversity).
+
+
+    \item \textbf{F1:} Combines precision and recall specifically for the distribution of support versus contradiction, showing the effectiveness of our balance approach.
+     \item \textbf{Maximal Marginal Relevance (MMR):} We apply the Maximal Marginal Relevance (MMR) method, which uses the following selection criteria for re-ranking:
+
+\[
+\arg \max_{D_i \in \mathbb{R} \setminus S} \left[ \lambda \text{Sim}_1(D_i, Q) - (1 - \lambda) \max_{D_j \in S} \text{Sim}_2(D_i, D_j) \right]
+\]
+
+where:
+\begin{itemize}[left=0em]
+    \item \( \mathbb{R} \) denotes a set of top retrieved documents considered for re-ranking (\(|\mathbb{R}| = 100\) in our experiments),
+    \item \( S \) denotes the document set that is already selected,
+    \item \( \lambda \) is a hyperparameter, which we tune on the development split,
+    \item \(\text{Sim}_1\) indicates the relevance score of each document to the query, provided by the retriever,
+    \item \(\text{Sim}_2\) measures the similarity between documents, calculated by embedding each document with Universal AnglE Embedding and taking the cosine similarity between pairs.
+\end{itemize}
+
+By maximizing relevance while minimizing redundancy, MMR ensures that the set of retrieved documents includes a range of perspectives on the topic, making it effective for handling queries where multiple, potentially conflicting viewpoints exist.
+
+\end{enumerate}
+
+%\section{References}
+
+\begin{thebibliography}{}
+
+\bibitem{lewis2020retriever}
+Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., ... \& Riedel, S. (2020).
+Retriever-Augmented Generation for Knowledge-Intensive NLP Tasks.
+\textit{arXiv preprint arXiv:2005.11401}. Retrieved from \url{https://arxiv.org/abs/2005.11401}
+
+\bibitem{raffel2020limits}
+Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S., Matena, M., ... \& Liu, P. J. (2020).
+Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer.
+\textit{Journal of Machine Learning Research}, 21(1), 5485–5550. Retrieved from \url{https://jmlr.org/papers/volume21/20-074/20-074.pdf}
+
+\bibitem{tsatsaronis2015bioasq}
+Tsatsaronis, G., Balikas, G., Malakasiotis, P., Partalas, I., Zschunke, M., Alvers, M. R., ... \& Krithara, A. (2015).
+An Overview of the BIOASQ Large-Scale Biomedical Semantic Indexing and Question Answering Competition.
+\textit{BMC Bioinformatics}, 16(1), 1–28. \url{https://doi.org/10.1186/s12859-015-0675-7}
+
+\bibitem{clarke2021diversity}
+Clarke, C., Kulkarni, S., \& Vechtomova, O. (2021).
+Methods for Enhancing Search Result Diversity.
+\textit{Journal of Information Science}, 47(2), 135–150. \url{https://doi.org/10.1177/0165551519900427}
+
+\bibitem{krishna2022retrieval}
+Krishna, H., Saini, A., \& Anderson, M. (2022).
+Balanced Retrieval: Algorithms for Ensuring Fairness and Diversity in Search Results.
+In \textit{Proceedings of the 45th International ACM SIGIR Conference on Research and Development in Information Retrieval} (SIGIR '22), ACM, 000–000. \url{https://doi.org/10.1145/3511808.3523436}
+
+\bibitem{sarrouti2021factchecking}
+Sarrouti, M., Ben Abacha, A., Mrabet, Y., \& Demner-Fushman, D. (2021).
+Evidence-based Fact-Checking of Health-related Claims.
+In \textit{Findings of the Association for Computational Linguistics: EMNLP 2021}, 3499–3512. \url{https://aclanthology.org/2021.findings-emnlp.297.pdf}
+
+\bibitem{BERTpretraining}
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, Kristina Google, and A Language. 2019. BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. Retrieved from https://arxiv.org/pdf/1810.04805
+
+\bibitem{BIOBERT}
+Jehad Aldahdooh, Markus Vähä-Koskela, Jing Tang, and Ziaurrehman Tanoli. 2022. Using BERT to identify drug-target interactions from whole PubMed. BMC Bioinformatics 23, 1 (June 2022). DOI:https://doi.org/10.1186/s12859-022-04768-x
+
+\end{thebibliography}
+
+\section{Overlap Statement}
+This project does not overlap with other ongoing work, including personal or research projects, or other course assignments. 
+
+\section{Miscellaneous}
+
+\begin{enumerate}[left=0em]
+    \item \textbf{System Constraints:} Real-time stance classification with T5 may require substantial computational resources, so we will investigate optimizations like batch processing or early stopping for faster inference.
+    \item \textbf{Error Analysis:} We plan to perform an error analysis to understand instances where the stance classifier mislabels documents and to refine the training data if necessary.
+\end{enumerate}
+
+\balance
 
 \end{document}
