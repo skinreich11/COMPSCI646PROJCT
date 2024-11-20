@@ -2,10 +2,10 @@ import os
 import pandas as pd
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.metrics import ndcg_score
 import torch
 import numpy as np
 from tqdm import tqdm
+import pytrec_eval
 
 # Helper function for BM25 retrieval
 def bm25_retrieve(claim, corpus, top_n=100):
@@ -29,30 +29,30 @@ def rerank_with_biobert(claim, docs, tokenizer, model):
         scores = outputs.logits[:, 1].numpy()  # Assume binary classification, 1 is relevance
     return list(np.argsort(scores)[::-1]), scores
 
-# Compute evaluation metrics
-def compute_metrics(ranked_list, qrels, k_values):
-    metrics = {}
-    relevance_scores = np.array([qrels.get(doc, 0) for doc in ranked_list])  # Default relevance is 0
+# Prepare data for pytrec_eval
+def prepare_pytrec_eval_input(ranked_list, scores, qrels, topic_id):
+    topic_id = str(topic_id)
+    ranked_list = [str(doc_id) for doc_id in ranked_list]
     
-    # Calculate NDCG@k
-    for k in k_values:
-        top_k = ranked_list[:k]
-        top_k_relevance = [qrels.get(doc, 0) for doc in top_k]
-
-        # Create an ideal ranking for the top-k documents based on available qrels
-        ideal_relevance = sorted(qrels.values(), reverse=True)[:k]
-
-        # Calculate NDCG@k
-        metrics[f"NDCG@{k}"] = ndcg_score([ideal_relevance], [top_k_relevance])
-
-    # Calculate MAP@k
-    for k in k_values:
-        top_k_relevance = relevance_scores[:k]
-        cumulative_relevance = [
-            rel / (i + 1) if rel > 0 else 0 for i, rel in enumerate(top_k_relevance)
-        ]
-        metrics[f"MAP@{k}"] = np.sum(cumulative_relevance) / min(k, len(qrels))
+    # Create the results dictionary for pytrec_eval
+    results = {topic_id: {doc: float(score) for doc, score in zip(ranked_list, scores)}}
     
+    # Create the qrels dictionary for pytrec_eval
+    topic_qrels = qrels.get(int(topic_id), {})
+    qrels_dict = {topic_id: {str(doc): int(rel) for doc, rel in topic_qrels.items()}}
+    
+    return results, qrels_dict
+
+# Compute evaluation metrics using pytrec_eval
+def compute_metrics_pytrec_eval(results, qrels_dict):
+    evaluator = pytrec_eval.RelevanceEvaluator(
+        qrels_dict, 
+        {"ndcg_cut.5", "ndcg_cut.10", "ndcg_cut.20", "ndcg_cut.50", "ndcg_cut.100", 
+         "map_cut.5", "map_cut.10", "map_cut.20", "map_cut.50", "map_cut.100"}
+    )
+    print("Results:", results)
+    print("Qrels Dict:", qrels_dict)
+    metrics = evaluator.evaluate(results)
     return metrics
 
 # Main pipeline
@@ -63,9 +63,10 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
     # Load CORD-19 dataset
     cord19_df = pd.read_csv(cord19_csv)
     cord19_docs = (
-    cord19_df['title'].fillna('').astype(str) + " " + cord19_df['abstract'].fillna('').astype(str)
+        cord19_df['title'].fillna('').astype(str) + " " + cord19_df['abstract'].fillna('').astype(str)
     )
     cord19_docs.index = cord19_df['cord_uid']
+    cord19_df.set_index('cord_uid', inplace=True)
     
     # Load relevance judgments (qrels)
     qrels_df = pd.read_csv(qrels_csv)
@@ -78,45 +79,50 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
             qrels[topic] = {}
         qrels[topic][cord_uid] = relevance
     
-    # Load BioBERT
+    """# Load BioBERT
     tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
     model = AutoModelForSequenceClassification.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
+    """
+    tokenizer = AutoTokenizer.from_pretrained("NeuML/bert-small-cord19")
+    model = AutoModelForSequenceClassification.from_pretrained("NeuML/bert-small-cord19")
 
     # Metrics collection
     metrics = []
 
-    # Process each claim
-    for _, row in tqdm(claims_df.iterrows(), total=len(claims_df)):
+    # Process each claim (first 5 only)
+    for _, row in tqdm(claims_df.head(5).iterrows(), total=5):
         claim = row['claim']
         topic_id = int(row['topic_ip'])
         
         # Skip topics without qrels
         if topic_id not in qrels:
             continue
-        
         # BM25 retrieval
         bm25_results = bm25_retrieve(claim, cord19_docs, top_n=100)
-        bm25_doc_ids = [cord19_df.index[i] for i, _ in bm25_results]
-        bm25_scores = [score for _, score in bm25_results]
+        bm25_doc_ids = [cord19_docs.index[i] for i, _ in bm25_results]
 
         # BioBERT reranking
         rerank_indices, rerank_scores = rerank_with_biobert(
             claim, 
-            [cord19_docs[doc_id] for doc_id in bm25_doc_ids],
+            cord19_df.loc[bm25_doc_ids, 'title'].fillna('') + " " + cord19_df.loc[bm25_doc_ids, 'abstract'].fillna(''),
             tokenizer, 
             model
         )
         reranked_doc_ids = [bm25_doc_ids[i] for i in rerank_indices]
 
-        # Compute metrics
-        claim_metrics = compute_metrics(
+        # Prepare data for pytrec_eval
+        results, qrels_dict = prepare_pytrec_eval_input(
             reranked_doc_ids, 
-            qrels[topic_id],  # Pass qrels for the specific topic
-            k_values=[5, 10, 20, 50, 100]
+            rerank_scores, 
+            qrels, 
+            topic_id
         )
-        claim_metrics['claim'] = claim
-        claim_metrics['topic_id'] = topic_id
-        metrics.append(claim_metrics)
+        
+        # Compute metrics using pytrec_eval
+        claim_metrics = compute_metrics_pytrec_eval(results, qrels_dict)
+        claim_metrics[str(topic_id)]['claim'] = claim
+        claim_metrics[str(topic_id)]['topic_id'] = topic_id
+        metrics.append(claim_metrics[str(topic_id)])
     
     # Save results to CSV
     metrics_df = pd.DataFrame(metrics)
