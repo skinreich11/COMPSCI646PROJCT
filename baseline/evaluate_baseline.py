@@ -50,8 +50,6 @@ def compute_metrics_pytrec_eval(results, qrels_dict):
         {"ndcg_cut.5", "ndcg_cut.10", "ndcg_cut.20", "ndcg_cut.50", "ndcg_cut.100", 
          "map_cut.5", "map_cut.10", "map_cut.20", "map_cut.50", "map_cut.100"}
     )
-    print("Results:", results)
-    print("Qrels Dict:", qrels_dict)
     metrics = evaluator.evaluate(results)
     return metrics
 
@@ -90,7 +88,7 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
     metrics = []
 
     # Process each claim (first 5 only)
-    for _, row in tqdm(claims_df.head(5).iterrows(), total=5):
+    for _, row in tqdm(claims_df.iterrows(), total=len(claims_df)):
         claim = row['claim']
         topic_id = int(row['topic_ip'])
         
