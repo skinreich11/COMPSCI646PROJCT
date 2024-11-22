@@ -53,6 +53,7 @@ def compute_metrics_pytrec_eval(results, qrels_dict):
     metrics = evaluator.evaluate(results)
     return metrics
 
+# Helper function for calculating inverse simpson index
 def inverse_simpson_index(supporting, contradicting, neutral):
     total = supporting + contradicting + neutral
     
@@ -132,18 +133,6 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
         claim_metrics = compute_metrics_pytrec_eval(results, qrels_dict)
         claim_metrics[str(topic_id)]['claim'] = claim
         claim_metrics[str(topic_id)]['topic_id'] = topic_id
-        
-        # Calculate Inverse Simpson Index
-        topic_qrels = qrels.get(topic_id, {})
-        supporting = sum(1 for rel in topic_qrels.values() if rel == 2)
-        contradicting = sum(1 for rel in topic_qrels.values() if rel == 0)
-        neutral = sum(1 for rel in topic_qrels.values() if rel == 1)
-        
-        isi = inverse_simpson_index(supporting, contradicting, neutral)
-        
-        # Add Inverse Simpson Index to claim_metrics
-        claim_metrics[str(topic_id)]['inverse_simpson_index'] = isi
-
         metrics.append(claim_metrics[str(topic_id)])
     
     # Save results to CSV
