@@ -14,165 +14,258 @@ tokenizer = T5Tokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name)
 
 
-def get_doc_ids_from_results(row: pd.Series, cord19_df: pd.DataFrame, k: int) -> List[str]:
-    """Get top k document IDs from BM25 results"""
+import torch
+from transformers import T5Tokenizer, T5ForSequenceClassification
+import numpy as np
+import pandas as pd
+from typing import List, Dict, Tuple
+from tqdm import tqdm
+import os
+from sklearn.metrics import ndcg_score
+from rank_bm25 import BM25Okapi
+
+class T5DiversityCalculator:
+    def __init__(self):
+        """Initialize T5 model for stance classification"""
+        print("Initializing T5 model...")
+        self.tokenizer = T5Tokenizer.from_pretrained("t5-base")
+        self.model = T5ForSequenceClassification.from_pretrained(
+            "t5-base",
+            num_labels=3  # support/contradict/neutral
+        )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        print(f"Model initialized on {self.device}")
+
+    def get_stance_distribution_at_k(self, claim: str, documents: List[str], k_values: List[int]) -> Dict[int, np.ndarray]:
+        """Get stance distribution for different k values"""
+        all_stance_scores = []
+        
+        for doc in tqdm(documents, desc="Analyzing document stances"):
+            input_text = f"Classify stance: claim: {claim} document: {doc}"
+            inputs = self.tokenizer(
+                input_text,
+                return_tensors="pt",
+                max_length=512,
+                truncation=True,
+                padding=True
+            ).to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                probabilities = torch.softmax(outputs.logits, dim=-1)
+                all_stance_scores.append(probabilities[0].cpu().numpy())
+
+        all_stance_scores = np.array(all_stance_scores)
+        
+        k_distributions = {}
+        for k in k_values:
+            if k <= len(all_stance_scores):
+                k_distributions[k] = all_stance_scores[:k]
+        
+        return k_distributions
+
+    def calculate_inverse_simpson(self, stance_distribution: np.ndarray) -> float:
+        """Calculate Inverse Simpson Index"""
+        category_proportions = stance_distribution.mean(axis=0)
+        simpson_index = np.sum(category_proportions ** 2)
+        return 1 / simpson_index if simpson_index > 0 else 0
+
+    def evaluate_diversity_at_k(self, claim: str, documents: List[str], k_values: List[int] = [5, 10, 20, 50, 100]) -> Dict:
+        """Calculate diversity metrics for different k values"""
+        k_distributions = self.get_stance_distribution_at_k(claim, documents, k_values)
+        
+        results = {}
+        for k, distribution in k_distributions.items():
+            category_proportions = distribution.mean(axis=0)
+            inverse_simpson = self.calculate_inverse_simpson(distribution)
+            
+            results[k] = {
+                'stance_support': float(category_proportions[0]),
+                'stance_contradict': float(category_proportions[1]),
+                'stance_neutral': float(category_proportions[2]),
+                'inverse_simpson_index': float(inverse_simpson),
+                'diversity_level': 'high' if inverse_simpson > 2 else 'medium' if inverse_simpson > 1.5 else 'low'
+            }
+            
+        return results
+
+def get_doc_ids_from_results(row: pd.Series, cord19_df: pd.DataFrame, bm25_results: List[Tuple[int, float]]) -> List[str]:
+    """Get document IDs from BM25 results"""
+    print(f"\nProcessing claim: {row['claim'][:50]}...")
+    print(f"Topic ID: {row['topic_id']}")
+    
     try:
-        # Assume cord19_df index is ordered by BM25 relevance
-        available_docs = list(cord19_df.index)
-        # Check document relevance using ndcg score
-        if row[f'ndcg_cut_{k}'] > 0:
-            return available_docs[:k]
-        return []
+        indices = [idx for idx, _ in bm25_results]
+        doc_ids = [cord19_df.index[i] for i in indices]
+        
+        print(f"Found {len(doc_ids)} document IDs")
+        print(f"First few doc IDs: {doc_ids[:5]}")
+        
+        return doc_ids
     except Exception as e:
-        print(f"Error getting doc IDs: {str(e)}")
+        print(f"Error getting document IDs: {str(e)}")
         return []
 
-def process_documents(claim: str, row: pd.Series, cord19_df: pd.DataFrame, k: int) -> List[str]:
-    """Process documents and print detailed information"""
+def process_documents(doc_ids: List[str], cord19_df: pd.DataFrame) -> List[str]:
+    """Process documents from CORD-19 dataset"""
     documents = []
-    doc_ids = get_doc_ids_from_results(row, cord19_df, k)
-    
-    print(f"\nProcessing claim: {claim[:50]}...")
-    print(f"Found {len(doc_ids)} document IDs for k={k}")
+    print(f"\nProcessing {len(doc_ids)} documents...")
     
     for doc_id in doc_ids:
         try:
-            # Ensure document exists
             if doc_id in cord19_df.index:
                 title = str(cord19_df.loc[doc_id, 'title']).strip()
                 abstract = str(cord19_df.loc[doc_id, 'abstract']).strip()
                 
-                if title or abstract:
-                    doc_text = f"{title} {abstract}".strip()
-                    if doc_text:
-                        documents.append(doc_text)
-                        
-            if len(documents) % 10 == 0:
-                print(f"Processed {len(documents)} documents...")
-                
+                doc_text = f"{title} {abstract}".strip()
+                if doc_text:
+                    documents.append(doc_text)
+                    if len(documents) <= 3:
+                        print(f"Sample document {len(documents)}: {doc_text[:100]}...")
+            else:
+                print(f"Document ID {doc_id} not found in CORD-19 dataset")
         except Exception as e:
-            print(f"Error processing doc {doc_id}: {str(e)}")
+            print(f"Error processing document {doc_id}: {str(e)}")
             continue
     
-    print(f"Successfully processed {len(documents)} documents for k={k}")
+    print(f"Successfully processed {len(documents)} valid documents")
     return documents
+
+def bm25_retrieve(claim: str, corpus: List[str], top_n: int = 100) -> List[Tuple[int, float]]:
+    """Perform BM25 retrieval"""
+    print(f"\nPerforming BM25 retrieval for claim: {claim[:50]}...")
+    
+    tokenized_corpus = [doc.split() for doc in corpus]
+    bm25 = BM25Okapi(tokenized_corpus)
+    scores = bm25.get_scores(claim.split())
+    
+    top_indices = np.argsort(scores)[-top_n:][::-1]
+    results = [(i, scores[i]) for i in top_indices]
+    
+    print(f"Retrieved {len(results)} documents")
+    return results
 
 def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator, 
                      cord19_df: pd.DataFrame, k_values: List[int]) -> Dict:
-    """Calculate metrics for each k value"""
+    """Calculate metrics for a single claim"""
     claim = row['claim']
+    print(f"\nProcessing claim: {claim[:50]}...")
+    
+    try:
+        # Get CORD-19 documents
+        cord19_docs = (
+            cord19_df['title'].fillna('').astype(str) + " " + 
+            cord19_df['abstract'].fillna('').astype(str)
+        ).tolist()
+        
+        # Perform BM25 retrieval
+        bm25_results = bm25_retrieve(claim, cord19_docs)
+        
+        # Get document IDs
+        doc_ids = get_doc_ids_from_results(row, cord19_df, bm25_results)
+        
+        if not doc_ids:
+            print("No document IDs found")
+            return create_empty_metrics(row, k_values)
+        
+        # Get document contents
+        documents = process_documents(doc_ids, cord19_df)
+        
+        if not documents:
+            print("No valid documents found")
+            return create_empty_metrics(row, k_values)
+        
+        # Calculate diversity metrics
+        diversity_metrics = calculator.evaluate_diversity_at_k(claim, documents, k_values)
+        
+        # Build result dictionary
+        result = {
+            'claim': claim,
+            'topic_id': row['topic_id']
+        }
+        
+        # Add original metrics
+        for k in k_values:
+            result[f'ndcg@{k}'] = row[f'ndcg_cut_{k}']
+            result[f'map@{k}'] = row[f'map_cut_{k}']
+        
+        # Add diversity metrics
+        for k in k_values:
+            if k in diversity_metrics:
+                metrics = diversity_metrics[k]
+                result.update({
+                    f'stance_support@{k}': metrics['stance_support'],
+                    f'stance_contradict@{k}': metrics['stance_contradict'],
+                    f'stance_neutral@{k}': metrics['stance_neutral'],
+                    f'inverse_simpson@{k}': metrics['inverse_simpson_index'],
+                    f'diversity_level@{k}': metrics['diversity_level']
+                })
+        
+        print(f"Successfully calculated metrics for k values: {k_values}")
+        return result
+    
+    except Exception as e:
+        print(f"Error calculating metrics: {str(e)}")
+        return create_empty_metrics(row, k_values)
+
+def create_empty_metrics(row: pd.Series, k_values: List[int]) -> Dict:
+    """Create empty metrics for different k values"""
     result = {
-        'claim': claim,
+        'claim': row['claim'],
         'topic_id': row['topic_id']
     }
     
-    # Add original BM25 metrics
     for k in k_values:
-        result[f'ndcg@{k}'] = row[f'ndcg_cut_{k}']
-        result[f'map@{k}'] = row[f'map_cut_{k}']
-    
-    # Calculate diversity metrics for each k
-    for k in k_values:
-        print(f"\nProcessing k={k} for claim: {claim[:50]}...")
-        
-        # Get and process documents
-        documents = process_documents(claim, row, cord19_df, k)
-        
-        if not documents:
-            print(f"No documents found for k={k}, using empty metrics")
-            result.update({
-                f'stance_support@{k}': 0.0,
-                f'stance_contradict@{k}': 0.0,
-                f'stance_neutral@{k}': 0.0,
-                f'inverse_simpson@{k}': 0.0,
-                f'diversity_level@{k}': 'low'
-            })
-            continue
-        
-        try:
-            # Calculate stance distribution
-            stance_distribution = calculator.get_stance_distribution_at_k(claim, documents, [k])[k]
-            
-            # Calculate metrics
-            category_proportions = stance_distribution.mean(axis=0)
-            inverse_simpson = calculator.calculate_inverse_simpson(stance_distribution)
-            
-            # Save results
-            result.update({
-                f'stance_support@{k}': float(category_proportions[0]),
-                f'stance_contradict@{k}': float(category_proportions[1]),
-                f'stance_neutral@{k}': float(category_proportions[2]),
-                f'inverse_simpson@{k}': float(inverse_simpson),
-                f'diversity_level@{k}': 'high' if inverse_simpson > 2 else 'medium' if inverse_simpson > 1.5 else 'low'
-            })
-            
-            print(f"Successfully calculated metrics for k={k}")
-            print(f"Inverse Simpson Index: {inverse_simpson:.3f}")
-            print(f"Stance Distribution: Support={category_proportions[0]:.3f}, "
-                  f"Contradict={category_proportions[1]:.3f}, Neutral={category_proportions[2]:.3f}")
-            
-        except Exception as e:
-            print(f"Error calculating metrics for k={k}: {str(e)}")
-            result.update({
-                f'stance_support@{k}': 0.0,
-                f'stance_contradict@{k}': 0.0,
-                f'stance_neutral@{k}': 0.0,
-                f'inverse_simpson@{k}': 0.0,
-                f'diversity_level@{k}': 'low'
-            })
+        result.update({
+            f'ndcg@{k}': row[f'ndcg_cut_{k}'],
+            f'map@{k}': row[f'map_cut_{k}'],
+            f'stance_support@{k}': 0.0,
+            f'stance_contradict@{k}': 0.0,
+            f'stance_neutral@{k}': 0.0,
+            f'inverse_simpson@{k}': 0.0,
+            f'diversity_level@{k}': 'low'
+        })
     
     return result
 
 def main():
+    """Main function"""
     # File paths
     bm25_results_file = "./results.csv"
     cord19_csv = "./processed_metadata.csv"
     output_file = "./diversity_results.csv"
     
-    # K values to evaluate
-    k_values = [10, 20, 50, 100]
+    # K values - now including 5
+    k_values = [5, 10, 20, 50, 100]
     
-    # Load data
     print("Loading data...")
     bm25_results = pd.read_csv(bm25_results_file)
-    print(f"Loaded {len(bm25_results)} BM25 results")
+    print(f"Loaded {len(bm25_results)} results")
     
     cord19_df = pd.read_csv(cord19_csv)
     print(f"Loaded {len(cord19_df)} CORD-19 documents")
     
-    # Check CORD-19 dataset columns
-    print("\nCORD-19 dataset columns:", cord19_df.columns.tolist())
-    
-    # Set index
-    if 'cord_uid' in cord19_df.columns:
-        cord19_df.set_index('cord_uid', inplace=True)
-        print("Set cord_uid as index")
-    else:
-        print("Warning: cord_uid column not found in CORD-19 dataset")
-        return
+    cord19_df.set_index('cord_uid', inplace=True)
     
     # Initialize calculator
     calculator = T5DiversityCalculator()
     
-    # Process each claim
+    # Process claims
     all_results = []
-    for idx, row in tqdm(bm25_results.iterrows(), total=len(bm25_results)):
-        print(f"\nProcessing claim {idx + 1}/{len(bm25_results)}")
+    for idx, row in tqdm(bm25_results.iterrows(), total=len(bm25_results), desc="Processing claims"):
         metrics = calculate_metrics(row, calculator, cord19_df, k_values)
         all_results.append(metrics)
         
-        # Save temporary results every 5 claims
-        if (idx + 1) % 5 == 0:
-            temp_df = pd.DataFrame(all_results)
-            temp_df.to_csv(f"{output_file}.temp", index=False)
-            print(f"Saved temporary results for {idx + 1} claims")
+        if (idx + 1) % 10 == 0:
+            print(f"\nProcessed {idx + 1}/{len(bm25_results)} claims")
     
-    # Create final results DataFrame and save
+    # Save results
     results_df = pd.DataFrame(all_results)
     results_df.to_csv(output_file, index=False)
-    print(f"\nFinal results saved to: {output_file}")
+    print(f"\nResults saved to: {output_file}")
     
-    # Print summary statistics
+    # Print statistics
     print("\nSummary Statistics:")
     for k in k_values:
         print(f"\nMetrics at k={k}:")
@@ -180,8 +273,10 @@ def main():
         print(f"Average Stance Support@{k}: {results_df[f'stance_support@{k}'].mean():.3f}")
         print(f"Average Stance Contradict@{k}: {results_df[f'stance_contradict@{k}'].mean():.3f}")
         print(f"Average Stance Neutral@{k}: {results_df[f'stance_neutral@{k}'].mean():.3f}")
-        print(f"Diversity Level Distribution@{k}:")
-        print(results_df[f'diversity_level@{k}'].value_counts())
+        
+        if f'diversity_level@{k}' in results_df.columns:
+            print(f"Diversity Level Distribution@{k}:")
+            print(results_df[f'diversity_level@{k}'].value_counts())
 
 if __name__ == "__main__":
     main()
