@@ -143,10 +143,6 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
             qrels[topic] = {}
         qrels[topic][cord_uid] = relevance
     
-    """# Load BioBERT
-    tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
-    model = AutoModelForSequenceClassification.from_pretrained("dmis-lab/biobert-base-cased-v1.1")
-    """
     tokenizer = AutoTokenizer.from_pretrained("NeuML/bert-small-cord19")
     model = AutoModelForSequenceClassification.from_pretrained("NeuML/bert-small-cord19")
 
