@@ -13,7 +13,6 @@ model_name = "t5-base"
 tokenizer = T5Tokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name)
 
-
 import torch
 from transformers import T5Tokenizer, T5ForSequenceClassification
 import numpy as np
@@ -23,6 +22,8 @@ from tqdm import tqdm
 import os
 from sklearn.metrics import ndcg_score
 from rank_bm25 import BM25Okapi
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+from nltk.util import ngrams
 
 class T5DiversityCalculator:
     def __init__(self):
@@ -146,6 +147,30 @@ def bm25_retrieve(claim: str, corpus: List[str], top_n: int = 100) -> List[Tuple
     print(f"Retrieved {len(results)} documents")
     return results
 
+# Helper function to calculate Self-BLEU for diversity
+def calculate_self_bleu(documents, n_grams=4, k_values=[5, 10, 20, 50, 100]):
+    results = {}
+    for k in k_values:
+        if k > len(documents):
+            continue
+        selected_docs = documents[:k]
+
+        # Prepare hypotheses and references for BLEU calculation
+        hypotheses = []
+        list_of_references = []
+
+        for i, target_doc in enumerate(selected_docs):
+            references = selected_docs[:i] + selected_docs[i + 1:]
+            hypotheses.append(target_doc.split())
+            list_of_references.append([ref.split() for ref in references])
+
+        # Calculate corpus-level BLEU score
+        smoothing = SmoothingFunction().method1
+        score = corpus_bleu(list_of_references, hypotheses, weights=(1.0/n_grams,) * n_grams, smoothing_function=smoothing)
+        results[f"Self_BLEU@{k}"] = score
+
+    return results
+
 def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator, 
                      cord19_df: pd.DataFrame, k_values: List[int]) -> Dict:
     """Calculate metrics for a single claim"""
@@ -178,6 +203,9 @@ def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator,
         
         # Calculate diversity metrics
         diversity_metrics = calculator.evaluate_diversity_at_k(claim, documents, k_values)
+
+        # Calculate Self-BLEU scores
+        self_bleu_scores = calculate_self_bleu(documents, k_values=k_values)
         
         # Build result dictionary
         result = {
@@ -199,9 +227,10 @@ def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator,
                     f'stance_contradict@{k}': metrics['stance_contradict'],
                     f'stance_neutral@{k}': metrics['stance_neutral'],
                     f'inverse_simpson@{k}': metrics['inverse_simpson_index'],
-                    f'diversity_level@{k}': metrics['diversity_level']
+                    f'diversity_level@{k}': metrics['diversity_level'],
+                    f'Self_BLEU@{k}': self_bleu_scores.get(f'Self_BLEU@{k}', 0.0)
                 })
-        
+
         print(f"Successfully calculated metrics for k values: {k_values}")
         return result
     
@@ -224,10 +253,12 @@ def create_empty_metrics(row: pd.Series, k_values: List[int]) -> Dict:
             f'stance_contradict@{k}': 0.0,
             f'stance_neutral@{k}': 0.0,
             f'inverse_simpson@{k}': 0.0,
-            f'diversity_level@{k}': 'low'
+            f'diversity_level@{k}': 'low',
+            f'Self_BLEU@{k}': 0.0
         })
     
     return result
+
 
 def main():
     """Main function"""
@@ -259,7 +290,7 @@ def main():
         
         if (idx + 1) % 10 == 0:
             print(f"\nProcessed {idx + 1}/{len(bm25_results)} claims")
-    
+
     # Save results
     results_df = pd.DataFrame(all_results)
     results_df.to_csv(output_file, index=False)
@@ -273,6 +304,7 @@ def main():
         print(f"Average Stance Support@{k}: {results_df[f'stance_support@{k}'].mean():.3f}")
         print(f"Average Stance Contradict@{k}: {results_df[f'stance_contradict@{k}'].mean():.3f}")
         print(f"Average Stance Neutral@{k}: {results_df[f'stance_neutral@{k}'].mean():.3f}")
+        print(f"Average Self_BLEU@{k}: {results_df[f'Self_BLEU@{k}'].mean():.3f}")
         
         if f'diversity_level@{k}' in results_df.columns:
             print(f"Diversity Level Distribution@{k}:")
