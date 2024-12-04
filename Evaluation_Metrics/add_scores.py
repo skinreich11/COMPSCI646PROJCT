@@ -22,22 +22,36 @@ def add_classifications_to_cord_uids(input_csv, classification_csv, output_csv):
     # Convert columns to lists if stored as string representations
     input_df['sorted_cord_uids'] = input_df['sorted_cord_uids'].apply(eval)
     classification_df['sorted_cord_uids'] = classification_df['sorted_cord_uids'].apply(eval)
-    classification_df['classification'] = classification_df['classification'].apply(eval)
+    classification_df['sorted_scores'] = classification_df['sorted_scores'].apply(eval)
 
     def match_classifications(row_uids, classifications_row):
         """
         Matches `cord_uids` to their classifications.
         Assigns a random classification if not found.
         """
-        classification_map = dict(zip(classifications_row['sorted_cord_uids'], classifications_row['classification']))
+        classification_map = dict(zip(classifications_row['sorted_cord_uids'], classifications_row['sorted_scores']))
         classifications = []
-
+        notFound = []
         for uid in row_uids:
             if uid in classification_map:
                 classifications.append(classification_map[uid])
             else:
                 print("not found", uid)
-                classifications.append(random.choice(['neutral', 'contradict', 'support']))
+                if notFound is []:
+                    ind = row_uids.index(uid)
+                else:
+                    ind = row_uids.index(uid) + len(notFound)
+                notFound.append(ind)
+        for ind in notFound:
+            if ind >= len(classifications):
+                if classifications[-1] <= 0.001:
+                    classifications.append(0.0)
+                else:
+                    classifications.append(classifications[-1] - 0.001)
+            else:
+                middle_value = (classifications[ind - 1] + classifications[ind + 1]) / 2
+                # Insert the middle value at the given index
+                classifications.insert(ind, middle_value)
 
         return classifications
 
@@ -49,7 +63,7 @@ def add_classifications_to_cord_uids(input_csv, classification_csv, output_csv):
         classifications_column.append(classifications)
 
     # Add the classifications column to the input DataFrame
-    input_df['classification'] = classifications_column
+    input_df['sorted_scores'] = classifications_column
 
     # Save the updated DataFrame
     input_df.to_csv(output_csv, index=False)
