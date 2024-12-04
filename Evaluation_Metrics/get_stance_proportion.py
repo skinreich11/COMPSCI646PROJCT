@@ -63,6 +63,6 @@ def calculate_cumulative_classification_proportions(csv_file, output_file, indic
 
 # Example usage
 if __name__ == "__main__":
-    csv_file_path = "./proposed_model/singRankedListWithClass.csv"  # Replace with the path to your input CSV file
-    output_csv_file = "./proposed_model/proposed_model_avarage_proportions.csv"  # Replace with your desired output file name
+    csv_file_path = "./Evaluation_Metrics/mmr_reranked_result2.csv"  # Replace with the path to your input CSV file
+    output_csv_file = "./Evaluation_Metrics/proposed_model_with_mmr_avarage_proportions.csv"  # Replace with your desired output file name
     calculate_cumulative_classification_proportions(csv_file_path, output_csv_file)
