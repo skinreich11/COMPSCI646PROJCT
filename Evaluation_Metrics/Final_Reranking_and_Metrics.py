@@ -1,10 +1,9 @@
 import os
 import pandas as pd
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModel
 import torch
 import numpy as np
 from tqdm import tqdm
-import pytrec_eval
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
@@ -22,13 +21,24 @@ def calculate_mmr(claim_embedding, doc_embeddings, relevance_scores, lambda_para
     :return: Ranked list of document indices
     """
     # Normalize embeddings
-    claim_embedding = normalize(claim_embedding.squeeze(0).numpy().reshape(1, -1), axis=1)
-    doc_embeddings = [
-        normalize(doc.squeeze(0).numpy().reshape(1, -1), axis=1)
-        if doc.shape[-1] == claim_embedding.shape[-1] else None
-        for doc in doc_embeddings
-    ]
-    doc_embeddings = [doc for doc in doc_embeddings if doc is not None]
+    claim_embedding = normalize(claim_embedding.reshape(1, -1), axis=1)
+    
+    # Normalize document embeddings and check shape compatibility
+    normalized_doc_embeddings = []
+    for doc in doc_embeddings:
+        try:
+            # Ensure that doc is not None and has the right shape
+            if doc.shape[0] == 1:  # Checking if batch size is 1
+                doc = doc.squeeze(0)  # Remove batch dimension of size 1
+            # Reshape and normalize the document embedding
+            normalized_doc_embeddings.append(normalize(doc.reshape(1, -1), axis=1))
+        except ValueError as e:
+            # Handle dimension mismatch error
+            print(f"Error processing document embedding: {e}. Skipping this document.")
+            continue
+
+    # Now we have normalized document embeddings
+    doc_embeddings = np.vstack(normalized_doc_embeddings)
 
     selected = []
     unselected = list(range(len(doc_embeddings)))
@@ -41,7 +51,7 @@ def calculate_mmr(claim_embedding, doc_embeddings, relevance_scores, lambda_para
             try:
                 if selected:
                     diversity = max(
-                        cosine_similarity(doc_embeddings[doc_id], doc_embeddings[s])[0][0]
+                        cosine_similarity(doc_embeddings[doc_id].reshape(1, -1), doc_embeddings[s].reshape(1, -1))[0][0]
                         for s in selected
                     )
             except ValueError:
@@ -60,96 +70,25 @@ def calculate_mmr(claim_embedding, doc_embeddings, relevance_scores, lambda_para
 
     return selected
 
-#@TODO: Copied from Diversity metrics calculator, import and reference later
-def process_documents(doc_ids: List[str], cord19_df: pd.DataFrame) -> List[str]:
-    """Process documents from CORD-19 dataset"""
-    documents = []
-    print(f"\nProcessing {len(doc_ids)} documents...")
+# Function to compute document embeddings
+def get_document_embedding(doc, tokenizer, model):
+    inputs_doc = tokenizer(doc, return_tensors="pt", truncation=True, padding="max_length", max_length=512)
+    with torch.no_grad():
+        outputs_doc = model(**inputs_doc)
+    # Use the mean of the last hidden state as the document embedding
+    doc_embedding = outputs_doc.last_hidden_state.mean(dim=1).cpu().numpy()
+    return doc_embedding
+
+# Main function to get final reranking list of documents
+def main(input_csv, cord19_csv, output_file, max_claims=5, lambda_param=0.5, top_n=100):
+    # Set device to GPU if available, else fallback to CPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
-    for doc_id in doc_ids:
-        try:
-            if doc_id in cord19_df.index:
-                title = str(cord19_df.loc[doc_id, 'title']).strip()
-                abstract = str(cord19_df.loc[doc_id, 'abstract']).strip()
-                
-                doc_text = f"{title} {abstract}".strip()
-                if doc_text:
-                    documents.append(doc_text)
-                    if len(documents) <= 3:
-                        print(f"Sample document {len(documents)}: {doc_text[:100]}...")
-            else:
-                print(f"Document ID {doc_id} not found in CORD-19 dataset")
-        except Exception as e:
-            print(f"Error processing document {doc_id}: {str(e)}")
-            continue
-    
-    print(f"Successfully processed {len(documents)} valid documents")
-    return documents
+    # Load input CSV combined file and convert other files to datasets
+    combined_docs_df = pd.read_csv(input_csv)
+    combined_docs_index = combined_docs_df.set_index('claim')  # Index by claim for fast lookup
 
-# Function to calculate MMR scores and include in metrics
-def calculate_mmr_score_and_update_metrics(claim, claim_embedding, doc_embeddings, reranked_scores, reranked_doc_ids, top_n=10, lambda_param=0.5):
-    # Select documents using MMR
-    mmr_selected_indices = calculate_mmr(claim_embedding, doc_embeddings, reranked_scores, lambda_param=lambda_param, top_n=top_n)
-
-    # Calculate average MMR relevance score
-    mmr_selected_scores = [reranked_scores[i] for i in mmr_selected_indices]
-    avg_mmr_score = np.mean(mmr_selected_scores) if mmr_selected_scores else 0.0
-
-    # Get MMR-selected document IDs
-    mmr_selected_doc_ids = [reranked_doc_ids[i] for i in mmr_selected_indices]
-
-    return avg_mmr_score, mmr_selected_doc_ids
-
-# Function to calculate Self-BLEU for diversity
-#@TODO: Copied from Diversity metrics calculator, import and reference later
-def calculate_self_bleu(documents, n_grams=4, k_values=[5, 10, 20, 50, 100]):
-    results = {}
-    for k in k_values:
-        if k > len(documents):
-            continue
-        selected_docs = documents[:k]
-
-        # Prepare hypotheses and references for BLEU calculation
-        hypotheses = []
-        list_of_references = []
-
-        for i, target_doc in enumerate(selected_docs):
-            references = selected_docs[:i] + selected_docs[i + 1:]
-            hypotheses.append(target_doc.split())
-            list_of_references.append([ref.split() for ref in references])
-
-        # Calculate corpus-level BLEU score
-        smoothing = SmoothingFunction().method1
-        score = corpus_bleu(list_of_references, hypotheses, weights=(1.0/n_grams,) * n_grams, smoothing_function=smoothing)
-        results[f"Self_BLEU@{k}"] = score
-
-    return results
-
-
-# Function to prepare data for pytrec_eval
-def prepare_pytrec_eval_input(ranked_list, scores, qrels, topic_id):
-    topic_id = str(topic_id)
-    results = {topic_id: {doc: float(score) for doc, score in zip(ranked_list, scores)}}
-    topic_qrels = qrels.get(int(topic_id), {})
-    qrels_dict = {topic_id: {doc: rel for doc, rel in topic_qrels.items()}}
-    return results, qrels_dict
-
-# Function to compute metrics using pytrec_eval
-def compute_metrics_pytrec_eval(results, qrels_dict):
-    evaluator = pytrec_eval.RelevanceEvaluator(
-        qrels_dict,
-        {"map_cut.5", "map_cut.10", "map_cut.20", "map_cut.50", "map_cut.100",
-        "ndcg_cut.5", "ndcg_cut.10", "ndcg_cut.20", "ndcg_cut.50", "ndcg_cut.100",
-         }
-    )
-    metrics = evaluator.evaluate(results)
-    return metrics
-
-# Main function to calculate all metrics for final reranking list
-def main(input_csv, cord19_csv, qrels_csv, output_file, max_claims=5):
-    # Load input CSV reranked file and convert other files to datasets
-    claims_df = pd.read_csv(input_csv)
-    
     # Load CORD-19 dataset
     cord19_df = pd.read_csv(cord19_csv)
     cord19_docs = (
@@ -157,81 +96,68 @@ def main(input_csv, cord19_csv, qrels_csv, output_file, max_claims=5):
     )
     cord19_docs.index = cord19_df['cord_uid']
     cord19_df.set_index('cord_uid', inplace=True)
-    
-    # Load relevance judgments (qrels)
-    qrels_df = pd.read_csv(qrels_csv)
-    qrels = {}
-    for _, row in qrels_df.iterrows():
-        topic = int(row['topic_ip'])
-        cord_uid = row['cord_uid']
-        relevance = int(row['relevance'])
-        if topic not in qrels:
-            qrels[topic] = {}
-        qrels[topic][cord_uid] = relevance
 
+    # Load model and tokenizer for claim/document embeddings
     tokenizer = AutoTokenizer.from_pretrained("NeuML/bert-small-cord19")
-    model = AutoModelForSequenceClassification.from_pretrained("NeuML/bert-small-cord19")
-    
-    # Metrics collection
-    metrics = []
+    model = AutoModel.from_pretrained("NeuML/bert-small-cord19")  # Change to AutoModel for hidden state
 
-    # @TODO: Change this to run from 5 claims to all claims by commenting first and uncommenting 2nd
-    for _, row in tqdm(input_csv.head(max_claims).iterrows(), total=max_claims, desc="Processing claims"):
-    # for _, row in tqdm(claims_df.iterrows(), total=len(claims_df)):
+    # Initialize output data
+    results = []
+
+    # Process claims
+    for _, row in tqdm(combined_docs_df.head(max_claims).iterrows(), total=max_claims, desc="Processing claims"):
         claim = row['claim']
-        topic_id = int(row['topic_ip'])
         
-        # Skip topics without qrels
-        if topic_id not in qrels:
+        # Check if claim exists in input_csv
+        if claim not in combined_docs_index.index:
+            print(f"Claim '{claim}' not found in input CSV. Skipping...")
             continue
 
-        # @TODO: Stav @Wentao : Update final_reranked_doc_ids and final_rerank_scores
-        final_reranked_doc_ids = []
-        final_rerank_scores = []
+        # Pull corresponding final_reranked_doc_ids and scores
+        try:
+            combined_doc_ids = eval(row['sorted_cord_uids'])
+            combined_doc_scores = eval(row['sorted_scores'])
+        except Exception as e:
+            print(f"Error parsing sorted_cord_uids or sorted_scores for claim '{claim}': {e}")
+            continue
 
-        # Prepare data for pytrec_eval
-        results, qrels_dict = prepare_pytrec_eval_input(
-            final_reranked_doc_ids,
-            final_rerank_scores,
-            qrels,
-            topic_id
+        # Encode claim and documents
+        # Claim embedding
+        inputs_claim = tokenizer(claim, return_tensors="pt", truncation=True, padding="max_length", max_length=512)
+        with torch.no_grad():
+            outputs_claim = model(**inputs_claim)
+        claim_embedding = outputs_claim.last_hidden_state.mean(dim=1).numpy()  # Average across token embeddings
+
+        # Document embeddings
+        doc_embeddings = []
+        for doc_id in combined_doc_ids:
+            doc_content = cord19_df.loc[doc_id, 'title'] + " " + cord19_df.loc[doc_id, 'abstract']
+            doc_embedding = get_document_embedding(doc_content, tokenizer, model)
+            doc_embeddings.append(doc_embedding)
+
+        # Convert to numpy array
+        doc_embeddings = np.vstack(doc_embeddings)
+
+        # Calculate MMR and re-rank documents
+        mmr_selected_indices = calculate_mmr(
+            claim_embedding, doc_embeddings, combined_doc_scores, lambda_param=lambda_param, top_n=top_n
         )
-        
-        # MMR calculation
-        claim_embedding = tokenizer(claim, return_tensors="pt", truncation=True, padding="max_length", max_length=512)["input_ids"]
-        doc_embeddings = [
-            tokenizer(doc, return_tensors="pt", truncation=True, padding="max_length", max_length=512)["input_ids"]
-            for doc in cord19_df.loc[final_reranked_doc_ids, 'title'].fillna('') + " " + cord19_df.loc[final_reranked_doc_ids, 'abstract'].fillna('')
-        ]
-        avg_mmr_score, mmr_selected_doc_ids = calculate_mmr_score_and_update_metrics(
-            claim, claim_embedding, doc_embeddings, final_rerank_scores, final_reranked_doc_ids, top_n=100
-        )
+        mmr_sorted_doc_ids = [combined_doc_ids[i] for i in mmr_selected_indices]
 
-        # Calculate self-BLEU for MMR selected documents
-        documents = process_documents(mmr_selected_doc_ids, cord19_df)
-        self_bleu_scores = calculate_self_bleu(documents)
-        
-        # Compute evaluation metrics using pytrec_eval
-        claim_metrics = compute_metrics_pytrec_eval(results, qrels_dict)
-
-        # save results to csv
-        result_row = {
+        # Append results to metrics
+        results.append({
             'claim': claim,
-            'topic_id': topic_id,
-            **claim_metrics[str(topic_id)],
-            'avg_mmr_score': avg_mmr_score,
-            **self_bleu_scores
-        }
-        results.append(result_row)
+            'sorted_cord_uids': mmr_sorted_doc_ids
+        })
 
+    # Write metrics to output file
     pd.DataFrame(results).to_csv(output_file, index=False)
     print(f"Results saved to {output_file}")
 
 if __name__ == "__main__":
-    # @TODO: Modify below file names to pass correct file inputs
-    RRF_Results_csv = "./Evaluation_Metrics/fusion_results.csv" # Input final fusion results csv file
-    cord19_csv = "./data/processed_metadata.csv"  # CORD-19 dataset CSV file
-    qrels_csv = "./data/processed_qrels.csv"  # Qrels file in CSV format
-    output_file = "./Evaluation_Metrics/final_results_mmr_selfBLEU.csv"  # Output file to save evaluation metrics
+    # Modify below file names to pass correct file inputs
+    input_csv = "S:/Code/COMPSCI646PROJCT/proposed_model/singRankedListWithClass.csv"
+    cord19_csv = "S:/Code/COMPSCI646PROJCT/data/processed_metadata.csv"  # CORD-19 dataset CSV file
+    output_file = "S:/Code/COMPSCI646PROJCT/Evaluation_Metrics/mmr_reranked_result.csv"  # Output file to save evaluation metrics
     
-    main(RRF_Results_csv, cord19_csv, qrels_csv, output_file)
+    main(input_csv, cord19_csv, output_file)
