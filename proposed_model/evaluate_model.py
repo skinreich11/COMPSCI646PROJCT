@@ -90,8 +90,8 @@ def classify_with_t5_iteratively(claim, docs, tokenizer, model, target_support=7
             placeholder_indices.append(idx)
         elif iter == 30:
             mean_prob = torch.mean(torch.tensor(placeholder_probs)).item()
-            lower_range = mean_prob * 0.985
-            upper_range = mean_prob * 1.015
+            lower_range = mean_prob * 0.99
+            upper_range = mean_prob * 1.01
             for i in range(len(placeholder_docs)):
                 if placeholder_probs[i] < lower_range:
                     contradict_docs.append(doc)
@@ -222,5 +222,5 @@ if __name__ == "__main__":
     input_csv = "./data/claims.csv"  # Input file with claim, topic_ip columns
     cord19_csv = "./data/processed_metadata.csv"  # CORD-19 dataset CSV file
     qrels_csv = "./data/processed_qrels.csv"  # Qrels file in CSV format
-    output_file = "./proposed_model/results.csv"  # Output file to save evaluation metrics
+    output_file = "./proposed_model/twoLists.csv"  # Output file to save evaluation metrics
     main(input_csv, cord19_csv, qrels_csv, output_file)
