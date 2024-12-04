@@ -20,7 +20,7 @@ def classify_with_t5_add_classification(input_csv, output_csv, tokenizer, model)
     df['classification'] = [[] for _ in range(len(df))]
     
     # Process each row in the CSV
-    for idx, row in tqdm(df.iterrows(), total=len(df)):
+    for idx, row in tqdm(df.iterrows(), total=len(df.head(1))):
         claim = row['claim']
         sorted_cord_uids = eval(row['sorted_cord_uids'])
         classifications = []
@@ -53,8 +53,8 @@ def classify_with_t5_add_classification(input_csv, output_csv, tokenizer, model)
             elif iter == 100:
                 # Calculate range
                 mean_prob = torch.mean(torch.tensor(placeholder_probs)).item()
-                lower_range = mean_prob * 0.985
-                upper_range = mean_prob * 1.015
+                lower_range = mean_prob * 0.992
+                upper_range = mean_prob * 1.008
                 
                 # Classify the initial 30 documents based on range
                 for prob, pred_class in zip(placeholder_probs, placeholder_docs):
