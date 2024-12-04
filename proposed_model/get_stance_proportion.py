@@ -21,12 +21,13 @@ def calculate_cumulative_classification_proportions(csv_file, output_file, indic
     df['classification'] = df['classification'].apply(eval)
 
     # Initialize dictionaries for cumulative proportions
-    totalNeu = 0.0
-    totalSup = 0.0
-    totalContra = 0.0
-    average_proportions = {}
     # Process each row
-    for _, row in df.head(1).iterrows():
+    allProortions = {ind: [] for ind in indices}
+    for _, row in df.iterrows():
+        totalNeu = 0.0
+        totalSup = 0.0
+        totalContra = 0.0
+        average_proportions = {}
         classifications = row['classification']
         for ind, cl in enumerate(classifications):
             if cl == "neutral":
@@ -41,16 +42,17 @@ def calculate_cumulative_classification_proportions(csv_file, output_file, indic
                     "neutral": float(totalNeu) / float(ind + 1),
                     "contradict": float(totalContra) / float(ind + 1),
                     "support": float(totalSup) / float(ind + 1)}
+        for ind in indices:
+            allProortions[ind].append(average_proportions[ind])
 
     # Prepare the results for saving
     output_data = []
     for index in indices:
-        proportions = average_proportions[index]
         output_data.append({
             "Index": index,
-            "Neutral": proportions["neutral"],
-            "Contradict": proportions["contradict"],
-            "Support": proportions["support"],
+            "Neutral": sum(i["neutral"] for i in allProortions[index]) / len(allProortions[index]),
+            "Contradict": sum(i["contradict"] for i in allProortions[index]) / len(allProortions[index]),
+            "Support": sum(i["support"] for i in allProortions[index]) / len(allProortions[index]),
         })
 
     # Save to a CSV file
