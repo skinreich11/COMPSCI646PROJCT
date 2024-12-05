@@ -163,6 +163,7 @@ def calculate_self_bleu(documents, n_grams=4, k_values=[5, 10, 20, 50, 100]):
             references = selected_docs[:i] + selected_docs[i + 1:]
             hypotheses.append(target_doc.split())
             list_of_references.append([ref.split() for ref in references])
+            
 
         # Calculate corpus-level BLEU score
         smoothing = SmoothingFunction().method1
