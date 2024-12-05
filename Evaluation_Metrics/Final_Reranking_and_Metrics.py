@@ -80,7 +80,7 @@ def get_document_embedding(doc, tokenizer, model):
     return doc_embedding
 
 # Main function to get final reranking list of documents
-def main(input_csv, cord19_csv, output_file, max_claims=5, lambda_param=0.5, top_n=100):
+def main(input_csv, cord19_csv, output_file, lambda_param=0.5, top_n=100):
     # Set device to GPU if available, else fallback to CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -105,7 +105,7 @@ def main(input_csv, cord19_csv, output_file, max_claims=5, lambda_param=0.5, top
     results = []
 
     # Process claims
-    for _, row in tqdm(combined_docs_df.head(max_claims).iterrows(), total=max_claims, desc="Processing claims"):
+    for _, row in tqdm(combined_docs_df.iterrows(), total=len(combined_docs_df), desc="Processing claims"):
         claim = row['claim']
         
         # Check if claim exists in input_csv
@@ -156,8 +156,8 @@ def main(input_csv, cord19_csv, output_file, max_claims=5, lambda_param=0.5, top
 
 if __name__ == "__main__":
     # Modify below file names to pass correct file inputs
-    input_csv = "S:/Code/COMPSCI646PROJCT/proposed_model/singRankedListWithClass.csv"
-    cord19_csv = "S:/Code/COMPSCI646PROJCT/data/processed_metadata.csv"  # CORD-19 dataset CSV file
-    output_file = "S:/Code/COMPSCI646PROJCT/Evaluation_Metrics/mmr_reranked_result.csv"  # Output file to save evaluation metrics
+    input_csv = "./proposed_model/singRankedListWithClass.csv" # input combined ranked list csv file
+    cord19_csv = "./data/processed_metadata.csv"  # CORD-19 dataset CSV file
+    output_file = "./Evaluation_Metrics/mmr_reranked_result.csv"  # Output file to save evaluation metrics
     
     main(input_csv, cord19_csv, output_file)
