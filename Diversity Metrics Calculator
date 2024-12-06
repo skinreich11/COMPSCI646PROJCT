@@ -27,12 +27,11 @@ from nltk.util import ngrams
 
 class T5DiversityCalculator:
     def __init__(self):
-        """Initialize T5 model for stance classification"""
         print("Initializing T5 model...")
         self.tokenizer = T5Tokenizer.from_pretrained("t5-base")
         self.model = T5ForSequenceClassification.from_pretrained(
             "t5-base",
-            num_labels=3  # support/contradict/neutral
+            num_labels=3
         )
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
@@ -73,7 +72,6 @@ class T5DiversityCalculator:
         return 1 / simpson_index if simpson_index > 0 else 0
 
     def evaluate_diversity_at_k(self, claim: str, documents: List[str], k_values: List[int] = [5, 10, 20, 50, 100]) -> Dict:
-        """Calculate diversity metrics for different k values"""
         k_distributions = self.get_stance_distribution_at_k(claim, documents, k_values)
         
         results = {}
@@ -92,7 +90,6 @@ class T5DiversityCalculator:
         return results
 
 def get_doc_ids_from_results(row: pd.Series, cord19_df: pd.DataFrame, bm25_results: List[Tuple[int, float]]) -> List[str]:
-    """Get document IDs from BM25 results"""
     print(f"\nProcessing claim: {row['claim'][:50]}...")
     print(f"Topic ID: {row['topic_id']}")
     
@@ -109,7 +106,6 @@ def get_doc_ids_from_results(row: pd.Series, cord19_df: pd.DataFrame, bm25_resul
         return []
 
 def process_documents(doc_ids: List[str], cord19_df: pd.DataFrame) -> List[str]:
-    """Process documents from CORD-19 dataset"""
     documents = []
     print(f"\nProcessing {len(doc_ids)} documents...")
     
@@ -134,7 +130,6 @@ def process_documents(doc_ids: List[str], cord19_df: pd.DataFrame) -> List[str]:
     return documents
 
 def bm25_retrieve(claim: str, corpus: List[str], top_n: int = 100) -> List[Tuple[int, float]]:
-    """Perform BM25 retrieval"""
     print(f"\nPerforming BM25 retrieval for claim: {claim[:50]}...")
     
     tokenized_corpus = [doc.split() for doc in corpus]
@@ -147,79 +142,51 @@ def bm25_retrieve(claim: str, corpus: List[str], top_n: int = 100) -> List[Tuple
     print(f"Retrieved {len(results)} documents")
     return results
 
-# Helper function to calculate Self-BLEU for diversity
 def calculate_self_bleu(documents, n_grams=4, k_values=[5, 10, 20, 50, 100]):
     results = {}
     for k in k_values:
         if k > len(documents):
             continue
         selected_docs = documents[:k]
-
-        # Prepare hypotheses and references for BLEU calculation
         hypotheses = []
         list_of_references = []
-
         for i, target_doc in enumerate(selected_docs):
             references = selected_docs[:i] + selected_docs[i + 1:]
             hypotheses.append(target_doc.split())
             list_of_references.append([ref.split() for ref in references])
-            
-
-        # Calculate corpus-level BLEU score
         smoothing = SmoothingFunction().method1
         score = corpus_bleu(list_of_references, hypotheses, weights=(1.0/n_grams,) * n_grams, smoothing_function=smoothing)
         results[f"Self_BLEU@{k}"] = score
-
     return results
 
 def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator, 
                      cord19_df: pd.DataFrame, k_values: List[int]) -> Dict:
-    """Calculate metrics for a single claim"""
     claim = row['claim']
     print(f"\nProcessing claim: {claim[:50]}...")
     
     try:
-        # Get CORD-19 documents
         cord19_docs = (
             cord19_df['title'].fillna('').astype(str) + " " + 
             cord19_df['abstract'].fillna('').astype(str)
         ).tolist()
-        
-        # Perform BM25 retrieval
         bm25_results = bm25_retrieve(claim, cord19_docs)
-        
-        # Get document IDs
         doc_ids = get_doc_ids_from_results(row, cord19_df, bm25_results)
-        
         if not doc_ids:
             print("No document IDs found")
             return create_empty_metrics(row, k_values)
-        
-        # Get document contents
         documents = process_documents(doc_ids, cord19_df)
-        
         if not documents:
             print("No valid documents found")
             return create_empty_metrics(row, k_values)
-        
-        # Calculate diversity metrics
         diversity_metrics = calculator.evaluate_diversity_at_k(claim, documents, k_values)
-
-        # Calculate Self-BLEU scores
         self_bleu_scores = calculate_self_bleu(documents, k_values=k_values)
-        
-        # Build result dictionary
         result = {
             'claim': claim,
             'topic_id': row['topic_id']
         }
-        
-        # Add original metrics
         for k in k_values:
             result[f'ndcg@{k}'] = row[f'ndcg_cut_{k}']
             result[f'map@{k}'] = row[f'map_cut_{k}']
-        
-        # Add diversity metrics
         for k in k_values:
             if k in diversity_metrics:
                 metrics = diversity_metrics[k]
@@ -240,7 +207,6 @@ def calculate_metrics(row: pd.Series, calculator: T5DiversityCalculator,
         return create_empty_metrics(row, k_values)
 
 def create_empty_metrics(row: pd.Series, k_values: List[int]) -> Dict:
-    """Create empty metrics for different k values"""
     result = {
         'claim': row['claim'],
         'topic_id': row['topic_id']
@@ -262,13 +228,9 @@ def create_empty_metrics(row: pd.Series, k_values: List[int]) -> Dict:
 
 
 def main():
-    """Main function"""
-    # File paths
     bm25_results_file = "./results.csv"
     cord19_csv = "./processed_metadata.csv"
     output_file = "./diversity_results.csv"
-    
-    # K values - now including 5
     k_values = [5, 10, 20, 50, 100]
     
     print("Loading data...")
@@ -279,11 +241,7 @@ def main():
     print(f"Loaded {len(cord19_df)} CORD-19 documents")
     
     cord19_df.set_index('cord_uid', inplace=True)
-    
-    # Initialize calculator
     calculator = T5DiversityCalculator()
-    
-    # Process claims
     all_results = []
     for idx, row in tqdm(bm25_results.iterrows(), total=len(bm25_results), desc="Processing claims"):
         metrics = calculate_metrics(row, calculator, cord19_df, k_values)
@@ -291,13 +249,9 @@ def main():
         
         if (idx + 1) % 10 == 0:
             print(f"\nProcessed {idx + 1}/{len(bm25_results)} claims")
-
-    # Save results
     results_df = pd.DataFrame(all_results)
     results_df.to_csv(output_file, index=False)
     print(f"\nResults saved to: {output_file}")
-    
-    # Print statistics
     print("\nSummary Statistics:")
     for k in k_values:
         print(f"\nMetrics at k={k}:")

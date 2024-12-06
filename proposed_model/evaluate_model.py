@@ -1,27 +1,20 @@
-import csv
-from datetime import datetime
 import numpy as np
 import pandas as pd
 import pytrec_eval
 import torch
 from tqdm import tqdm
 from rank_bm25 import BM25Okapi
-from transformers import T5Tokenizer, T5ForSequenceClassification, T5ForConditionalGeneration, AutoTokenizer, AutoModelForSequenceClassification
+from transformers import T5Tokenizer, T5ForSequenceClassification, AutoTokenizer, AutoModelForSequenceClassification
 
 def prepare_pytrec_eval_input(ranked_list, scores, qrels, topic_id):
     topic_id = str(topic_id)
     ranked_list = [str(doc_id) for doc_id in ranked_list]
-    
-    # Create the results dictionary for pytrec_eval
     results = {topic_id: {doc: float(score) for doc, score in zip(ranked_list, scores)}}
-    
-    # Create the qrels dictionary for pytrec_eval
     topic_qrels = qrels.get(int(topic_id), {})
     qrels_dict = {topic_id: {str(doc): int(rel) for doc, rel in topic_qrels.items()}}
     
     return results, qrels_dict
 
-# Compute evaluation metrics using pytrec_eval
 def compute_metrics_pytrec_eval(results, qrels_dict):
     evaluator = pytrec_eval.RelevanceEvaluator(
         qrels_dict, 
@@ -38,14 +31,7 @@ def bm25_retrieve(claim, corpus, top_n=100):
     top_indices = np.argsort(scores)[-top_n:][::-1]
     return [(i, scores[i]) for i in top_indices]
 
-# Helper function for BioBERT reranking
 def rerank_with_biobert(claim, docs, tokenizer, model):
-    """with open("./proposed_model/check_docs.csv", mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Document"])  # Add header
-        for doc in docs:
-            writer.writerow([doc])  # Write each document in a new row
-            """
     inputs = tokenizer(
         [f"{claim} [SEP] {doc}" for doc in docs], 
         return_tensors="pt", 
@@ -55,7 +41,7 @@ def rerank_with_biobert(claim, docs, tokenizer, model):
     )
     with torch.no_grad():
         outputs = model(**inputs)
-        scores = outputs.logits[:, 1].numpy()  # Assume binary classification, 1 is relevance
+        scores = outputs.logits[:, 1].numpy()
     return list(np.argsort(scores)[::-1]), scores
 
 def classify_with_t5_iteratively(claim, docs, tokenizer, model, target_support=75, target_contradict=75):
@@ -125,7 +111,6 @@ def classify_with_t5_iteratively(claim, docs, tokenizer, model, target_support=7
         if len(support_docs) == target_support and len(contradict_docs) == target_contradict:
             break
 
-    # Fill remaining slots with neutral documents if needed
     remaining_support_needed = target_support - len(support_docs)
     remaining_contradict_needed = target_contradict - len(contradict_docs)
 
@@ -141,12 +126,9 @@ def classify_with_t5_iteratively(claim, docs, tokenizer, model, target_support=7
     return support_docs, contradict_docs, support_indices, contradict_indices
 
 
-# Modified main pipeline
 def main(input_csv, cord19_csv, qrels_csv, output_file):
-    # Load input CSV
     claims_df = pd.read_csv(input_csv)
     
-    # Load CORD-19 dataset
     cord19_df = pd.read_csv(cord19_csv)
     cord19_docs = (
         cord19_df['title'].fillna('').astype(str) + " " + cord19_df['abstract'].fillna('').astype(str)
@@ -154,7 +136,6 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
     cord19_docs.index = cord19_df['cord_uid']
     cord19_df.set_index('cord_uid', inplace=True)
     
-    # Load relevance judgments (qrels)
     qrels_df = pd.read_csv(qrels_csv)
     qrels = {}
     for _, row in qrels_df.iterrows():
@@ -171,16 +152,10 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
     tokenizer = AutoTokenizer.from_pretrained("NeuML/bert-small-cord19")
     model = AutoModelForSequenceClassification.from_pretrained("NeuML/bert-small-cord19")
     
-
-    # Metrics collection
     metrics = []
-
-    # Process each claim
     for _, row in tqdm(claims_df.iterrows(), total=len(claims_df)):
         claim = row['claim']
         topic_id = int(row['topic_ip'])
-        
-        # Skip topics without qrels
         if topic_id not in qrels:
             continue
         
@@ -195,20 +170,14 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
         )
         support_doc_ids = [bm25_doc_ids[i] for i in support_indices]
         contradict_doc_ids = [bm25_doc_ids[i] for i in contradict_indices]
-
-        # Rerank support documents with BioBERT
         support_rerank_indices, support_rerank_scores = rerank_with_biobert(
             claim, cord19_df.loc[support_doc_ids, 'title'].fillna('') + " " + cord19_df.loc[support_doc_ids, 'abstract'].fillna(''), tokenizer, model
         )
         support_reranked_doc_ids = [support_doc_ids[i] for i in support_rerank_indices]
-
-        # Rerank contradict documents with BioBERT
         contradict_rerank_indices, contradict_rerank_scores = rerank_with_biobert(
             claim, cord19_df.loc[contradict_doc_ids, 'title'].fillna('') + " " + cord19_df.loc[contradict_doc_ids, 'abstract'].fillna(''), tokenizer, model
         )
         contradict_reranked_doc_ids = [contradict_doc_ids[i] for i in contradict_rerank_indices]
-
-        # Append results for further analysis
         metrics.append({
             "claim": claim,
             "support_reranked_docs": support_reranked_doc_ids,
@@ -219,8 +188,8 @@ def main(input_csv, cord19_csv, qrels_csv, output_file):
     print(f"Results saved to {output_file}")
 
 if __name__ == "__main__":
-    input_csv = "./data/claims.csv"  # Input file with claim, topic_ip columns
-    cord19_csv = "./data/processed_metadata.csv"  # CORD-19 dataset CSV file
-    qrels_csv = "./data/processed_qrels.csv"  # Qrels file in CSV format
-    output_file = "./proposed_model/twoLists.csv"  # Output file to save evaluation metrics
+    input_csv = "./data/claims.csv"
+    cord19_csv = "./data/processed_metadata.csv"
+    qrels_csv = "./data/processed_qrels.csv"
+    output_file = "./proposed_model/twoLists.csv"
     main(input_csv, cord19_csv, qrels_csv, output_file)

@@ -2,26 +2,8 @@ import pandas as pd
 from collections import Counter
 
 def calculate_cumulative_classification_proportions(csv_file, output_file, indices=[5, 10, 20, 50, 100]):
-    """
-    Calculate and average the cumulative proportions of classifications up to specified indices.
-    Save the results to a CSV file.
-
-    Parameters:
-        csv_file (str): Path to the input CSV file.
-        output_file (str): Path to the output CSV file.
-        indices (list): List of indices to evaluate (1-based).
-
-    Returns:
-        None
-    """
-    # Load the CSV file
     df = pd.read_csv(csv_file)
-
-    # Ensure the classification column is evaluated as lists
     df['classification'] = df['classification'].apply(eval)
-
-    # Initialize dictionaries for cumulative proportions
-    # Process each row
     allProortions = {ind: [] for ind in indices}
     for _, row in df.iterrows():
         totalNeu = 0.0
@@ -44,8 +26,6 @@ def calculate_cumulative_classification_proportions(csv_file, output_file, indic
                     "support": float(totalSup) / float(ind + 1)}
         for ind in indices:
             allProortions[ind].append(average_proportions[ind])
-
-    # Prepare the results for saving
     output_data = []
     for index in indices:
         output_data.append({
@@ -54,15 +34,11 @@ def calculate_cumulative_classification_proportions(csv_file, output_file, indic
             "Contradict": sum(i["contradict"] for i in allProortions[index]) / len(allProortions[index]),
             "Support": sum(i["support"] for i in allProortions[index]) / len(allProortions[index]),
         })
-
-    # Save to a CSV file
     output_df = pd.DataFrame(output_data)
     output_df.to_csv(output_file, index=False)
     print(f"Results saved to {output_file}")
 
-
-# Example usage
 if __name__ == "__main__":
-    csv_file_path = "./Evaluation_Metrics/mmr_reranked_result.csv"  # Replace with the path to your input CSV file
-    output_csv_file = "./Evaluation_Metrics/proposed_model_with_mmr_avarage_proportions.csv"  # Replace with your desired output file name
+    csv_file_path = "./Evaluation_Metrics/mmr_reranked_result.csv"
+    output_csv_file = "./Evaluation_Metrics/proposed_model_with_mmr_avarage_proportions.csv"
     calculate_cumulative_classification_proportions(csv_file_path, output_csv_file)

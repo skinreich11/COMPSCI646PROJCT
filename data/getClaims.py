@@ -15,7 +15,7 @@ def process_csv(inputFile, outputFile):
         writer.writerow(['claim', 'topic_ip'])
         for claim, topicIP in claimsSet:
             writer.writerow([claim, topicIP])
-inputFile =  '/path/to/HealthVer_dev.csv' # Replace with path to healthver_dev.csv file from the HealthVer dataset
+inputFile =  '/path/to/HealthVer_dev.csv'
 outputFile = './data/claims.csv'
 process_csv(inputFile, outputFile)
 print(f"Filtered CSV file has been saved to: {outputFile}")
